@@ -1,0 +1,10 @@
+---
+title: "Tugas Kuliah Pertemuan 2"
+author: "Muhammad Athaurahman (M0401241082)"
+date: "2026-08-27"
+output: html_document
+---
+
+```{r}
+
+```
