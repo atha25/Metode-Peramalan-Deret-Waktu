@@ -1,0 +1,96 @@
+---
+title: "Tugas Praktikum: Regresi Deret Waktu dan Autokorelasi"
+format: html
+editor: visual
+---
+
+```{r}
+library(lmtest)
+library(orcutt)
+```
+
+```{r}
+
+hildreth_lu <- function(y, x, rho_seq = seq(-0.99, 0.99, by = 0.01)) {
+  sse <- sapply(rho_seq, function(r) {
+    y_star <- y[-1] - r * y[-length(y)]
+    x_star <- x[-1] - r * x[-length(x)]
+    sum(residuals(lm(y_star ~ x_star))^2)
+  })
+  rho_opt <- rho_seq[which.min(sse)]
+
+  y_star <- y[-1] - rho_opt * y[-length(y)]
+  x_star <- x[-1] - rho_opt * x[-length(x)]
+  model_star <- lm(y_star ~ x_star)
+
+  b1 <- coef(model_star)[2]
+  b0 <- coef(model_star)[1] / (1 - rho_opt)
+
+  list(rho = rho_opt, model_transformasi = model_star,
+       intersep = b0, slope = b1)
+}
+```
+
+```{r}
+run_analysis <- function(y, x, label, alpha = 0.05) {
+  model <- lm(y ~ x)
+  cat("\n====", label, "====\n"); print(summary(model))
+
+  plot(residuals(model), type = "o", main = paste("Plot Sisaan -", label),
+       ylab = "Residual", xlab = "Periode")
+  abline(h = 0, lty = 2, col = "red")
+
+  dw <- dwtest(model); print(dw)
+  ada_ak <- dw$p.value < alpha
+  cat("\nKesimpulan:", if (ada_ak) "terdapat" else "tidak terdapat",
+      "autokorelasi (p =", round(dw$p.value, 4), ").\n")
+
+  if (ada_ak) {
+    cat("\n--- Penanganan 1: Cochrane-Orcutt ---\n")
+    model_co <- cochrane.orcutt(model)
+    print(model_co)
+
+    cat("\n--- Penanganan 2: Hildreth-Lu ---\n")
+    hl <- hildreth_lu(y, x)
+    cat("Rho optimum (Hildreth-Lu):", hl$rho, "\n")
+    print(summary(hl$model_transformasi))
+    dw_hl <- dwtest(hl$model_transformasi); print(dw_hl)
+
+    cat("\nPerbandingan rho -> Cochrane-Orcutt:", round(model_co$rho, 4),
+        "| Hildreth-Lu:", round(hl$rho, 4), "\n")
+
+    return(list(ols = model, cochrane_orcutt = model_co, hildreth_lu = hl))
+  }
+  invisible(model)
+}
+```
+
+## Data 1: Market Share vs Price
+
+```{r}
+market_share <- c(3.63,4.20,3.33,4.54,2.89,4.87,4.90,5.29,6.18,7.20,
+                   7.25,6.09,6.80,8.65,8.43,8.29,7.18,7.90,8.45,8.23)
+price <- c(0.97,0.95,0.99,0.91,0.98,0.90,0.89,0.86,0.85,0.82,
+           0.79,0.83,0.81,0.77,0.76,0.80,0.83,0.79,0.76,0.78)
+
+model1 <- run_analysis(market_share, price, "Market Share ~ Price")
+```
+
+Price berpengaruh signifikan (negatif) ke market share dengan semakin murah harga, semakin besar market share, dan model ini cukup baik menjelaskan datanya (R² = 0.95). Namun nilai DW = 1.14 menunjukkan masih ada autokorelasi positif ringan pada sisaan, sehingga standard error-nya belum sepenuhnya bisa diandalkan sebelum dilakukan penanganan. Rho hasil Cochrane-Orcutt dan Hildreth-Lu sebelumnya cukup dekat, jadi tinggal dicek nilai DW setelah transformasi untuk memastikan autokorelasinya sudah hilang.
+
+## Data 2: Sales vs Advertising
+
+```{r}
+sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,15.5,15.8,
+           16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,18.0,17.9,18.0,18.2,
+           18.2,18.3,18.6,19.2,19.3,19.5,19.2,19.3,19.5,20.0,20.0,19.9,
+           19.8,19.9,20.2,21.0)
+advertising <- c(9.4,9.6,10.0,10.4,10.8,10.9,11.7,12.2,12.5,12.9,13.0,
+                  13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,15.9,16.0,
+                  16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,18.7,18.9,19.2,
+                  20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+
+model2 <- run_analysis(sales, advertising, "Sales ~ Advertising")
+```
+
+Advertising juga berpengaruh positif signifikan terhadap sales, dengan R² = 0.96. Tapi DW awalnya cuma 0.16, artinya autokorelasinya cukup parah (wajar, karena datanya tahunan dengan tren yang mulus). Slope dari model OLS awal (0.71) jadi kurang tepat karena belum memperhitungkan autokorelasi tersebut. Setelah dikoreksi dengan Cochrane-Orcutt maupun Hildreth-Lu, rho-nya sama-sama sekitar 0.90, DW naik jadi \~1.94 (autokorelasi sudah hilang), dan nilai slope yang lebih tepat digunakan adalah \~0.49.
