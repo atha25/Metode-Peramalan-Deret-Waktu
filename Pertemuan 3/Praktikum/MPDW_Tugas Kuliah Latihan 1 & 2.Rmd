@@ -1,0 +1,248 @@
+---
+title: "Latihan 1 & 2 - Regresi dengan Peubah Lag"
+author:
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+  word_document: default
+  pdf_document: default
+---
+
+## *Packages*
+
+```{r, echo=FALSE}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+# Latihan 1 - Pangsa Pasar Pasta Gigi
+
+Y = pangsa pasar, X = harga. Datanya 20 periode, dibagi 15 data training dan 5 data test (sama kayak proporsi di modul).
+
+```{r}
+Yt <- c(3.63, 4.20, 3.33, 4.54, 2.89, 4.87, 4.90, 5.29, 6.18, 7.20,
+        7.25, 6.09, 6.80, 8.65, 8.43, 8.29, 7.18, 7.90, 8.45, 8.23)
+Xt <- c(0.97, 0.95, 0.99, 0.91, 0.98, 0.90, 0.89, 0.86, 0.85, 0.82,
+        0.79, 0.83, 0.81, 0.77, 0.76, 0.80, 0.83, 0.79, 0.76, 0.78)
+
+data1 <- data.frame(Periode = 1:20, Xt = Xt, Yt = Yt)
+train1 <- data1[1:15, ]
+test1  <- data1[16:20, ]
+train1.ts <- ts(train1)
+```
+
+## Model Koyck
+
+```{r}
+model.koyck1 <- koyckDlm(x = train1$Xt, y = train1$Yt)
+summary(model.koyck1)
+AIC(model.koyck1); BIC(model.koyck1)
+```
+
+Koefisien $X_t$ signifikan (p<0.001) tapi $Y_{t-1}$ jauh dari signifikan (p=0.83). Artinya pangsa pasar periode ini praktis ditentukan sama harga periode ini juga, efek "warisan" dari pangsa pasar sebelumnya nyaris nggak kelihatan.
+
+$$\hat{Y_t}=25.30-22.76X_t+0.027Y_{t-1}$$
+
+```{r}
+fore.koyck1 <- forecast(model = model.koyck1, x = test1$Xt, h = 5)
+fore.koyck1
+mape.koyck1 <- MAPE(fore.koyck1$forecasts, test1$Yt)
+mape.koyck1
+GoF(model.koyck1)
+```
+
+MAPE data test sekitar **6.7%**.
+
+## Regression with Distributed Lag
+
+### Cari Lag Optimum
+
+Karena data training cuma 15 baris, saya batasi pencarian lag maksimal cuma sampai 5 (kalau dipaksa lebih dari itu, modelnya kehabisan derajat bebas dan AIC-nya jadi nggak masuk akal / minus tak hingga).
+
+```{r}
+finiteDLMauto(formula = Yt ~ Xt, data = data.frame(train1),
+              q.min = 1, q.max = 5, model.type = "dlm",
+              error.type = "AIC", trace = TRUE)
+```
+
+Lag optimum ada di **q=3** (AIC paling kecil).
+
+```{r}
+model.dlm1 <- dlm(x = train1$Xt, y = train1$Yt, q = 3)
+summary(model.dlm1)
+AIC(model.dlm1); BIC(model.dlm1)
+```
+
+Cuma $X_t$ yang signifikan, tiga lag lainnya enggak — tapi AIC & BIC-nya jauh lebih kecil dibanding Koyck maupun DLM lag 1, jadi model ini masih lebih pas menangkap pola datanya secara keseluruhan.
+
+```{r}
+fore.dlm1 <- forecast(model = model.dlm1, x = test1$Xt, h = 5)
+fore.dlm1
+mape.dlm1 <- MAPE(fore.dlm1$forecasts, test1$Yt)
+mape.dlm1
+GoF(model.dlm1)
+```
+
+MAPE-nya **6.4%** — paling kecil dibanding model lain di Latihan 1 ini (bakal ketauan pas dibandingin di bawah).
+
+## Model Autoregressive (ARDL)
+
+```{r}
+model.ardl.opt1 <- ardlBoundOrders(data = data.frame(data1), ic = "AIC",
+                                   formula = Yt ~ Xt)
+model.ardl.opt1
+```
+
+Kombinasi AIC terkecil ada di p=3, q=2. Tapi ini training-nya cuma 15 data, jadi model p=3,q=2 makan banyak parameter (sisa 5 derajat bebas doang) — perlu dicek juga performa di data test-nya, jangan cuma modal AIC training.
+
+```{r}
+# pakai formula & data (bukan x=, y=) supaya forecast() di bawah bisa jalan
+model.ardl1 <- ardlDlm(formula = Yt ~ Xt, data = train1, p = 3, q = 2)
+summary(model.ardl1)
+AIC(model.ardl1); BIC(model.ardl1)
+```
+
+Bener aja, cuma intercept dan $X_t$ yang signifikan, sisanya enggak. Tanda-tanda overfit karena parameternya kebanyakan buat ukuran data segini.
+
+```{r}
+fore.ardl1 <- forecast(model = model.ardl1, x = matrix(test1$Xt, nrow = 1), h = 5)
+fore.ardl1
+mape.ardl1 <- MAPE(fore.ardl1$forecasts, test1$Yt)
+mape.ardl1
+GoF(model.ardl1)
+```
+
+Ternyata MAPE-nya malah paling gede (~9.4%) padahal AIC training-nya paling kecil — persis dugaan di atas, model ini overfit ke data training dan nggak segenerelisir itu ke data baru.
+
+## Perbandingan & Model Terbaik
+
+```{r}
+akurasi1 <- data.frame(
+  Model = c("Koyck", "DLM q=3", "ARDL(3,2)"),
+  AIC   = c(AIC(model.koyck1), AIC(model.dlm1), AIC(model.ardl1)),
+  MAPE  = c(mape.koyck1, mape.dlm1, mape.ardl1)
+)
+akurasi1
+```
+
+**Model DLM dengan lag 3 yang paling oke** buat Latihan 1 — AIC-nya kedua terkecil (tanpa overfit kayak ARDL) dan MAPE-nya paling rendah di antara semua kandidat. Dicek juga asumsi residualnya:
+
+```{r}
+dwtest(model.dlm1$model)
+bptest(model.dlm1$model)
+shapiro.test(residuals(model.dlm1$model))
+```
+
+Semua p-value di atas 0.05 (Durbin-Watson, BP, Shapiro-Wilk), berarti residualnya bebas dari autokorelasi, homoskedastis, dan normal. Model DLM lag 3 aman dipakai.
+
+$$\hat{Y_t}=27.97-27.52X_t+3.77X_{t-1}+2.80X_{t-2}-4.80X_{t-3}$$
+
+---
+
+# Latihan 2 - Sales vs Advertising
+
+Data tahunan 1975-2014 (40 observasi). Y = Sales, X = Advertising. Split 30 data training (1975-2004) dan 10 data test (2005-2014).
+
+```{r}
+Year <- 1975:2014
+Sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+Advertising <- c(9.4,9.6,10,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                 13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                 15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                 18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+
+data2 <- data.frame(Year = Year, Xt = Advertising, Yt = Sales)
+train2 <- data2[1:30, ]
+test2  <- data2[31:40, ]
+train2.ts <- ts(train2)
+```
+
+Soal minta model ARDL, jadi fokus ke situ — tapi biar tau "ARDL yang sesuai" itu ordonya berapa, dibandingin dulu sama Koyck dan DLM biasa.
+
+## Model Koyck (pembanding)
+
+```{r}
+model.koyck2 <- koyckDlm(x = train2$Xt, y = train2$Yt)
+summary(model.koyck2)
+AIC(model.koyck2); BIC(model.koyck2)
+```
+
+Beda sama Latihan 1, di sini kedua koefisien signifikan — $X_t$ (p=0.005) dan $Y_{t-1}$ (p<0.001). Masuk akal: penjualan tahun ini emang biasanya "nempel" ke penjualan tahun lalu, plus ada tambahan dari iklan tahun berjalan.
+
+$$\hat{Y_t}=1.72+0.222X_t+0.712Y_{t-1}$$
+
+```{r}
+fore.koyck2 <- forecast(model = model.koyck2, x = test2$Xt, h = 10)
+mape.koyck2 <- MAPE(fore.koyck2$forecasts, test2$Yt)
+mape.koyck2
+GoF(model.koyck2)
+```
+
+MAPE **~5.0%**.
+
+## Cari Ordo ARDL yang Sesuai
+
+```{r}
+model.ardl.opt2 <- ardlBoundOrders(data = data.frame(train2), ic = "AIC",
+                                   formula = Yt ~ Xt)
+model.ardl.opt2
+min_p <- c()
+for(i in 1:6){ min_p[i] <- min(model.ardl.opt2$Stat.table[[i]]) }
+q_opt2 <- which(min_p == min(min_p, na.rm = TRUE))
+p_opt2 <- which(model.ardl.opt2$Stat.table[[q_opt2]] ==
+                min(model.ardl.opt2$Stat.table[[q_opt2]], na.rm = TRUE))
+data.frame(p_optimum = p_opt2, q_optimum = q_opt2, AIC = model.ardl.opt2$min.Stat)
+```
+
+Hasilnya nunjuk ke **p=0, q=1** sebagai AIC terkecil. Lucunya, p=0 itu artinya nggak ada lag dari $X$ sama sekali — jadi bentuknya persis sama kayak model Koyck yang barusan difit di atas ($Y_t$ dipengaruhi $X_t$ dan $Y_{t-1}$ doang). Jadi buat Latihan 2 ini, model ARDL "yang sesuai" itu ya model Koyck-nya sendiri, nggak perlu nambah lag $X$ lagi.
+
+Sebagai pembanding, dicoba juga ARDL(1,1) yang nambahin satu lag $X$:
+
+```{r}
+# pakai formula & data (bukan x=, y=) supaya forecast() di bawah bisa jalan
+model.ardl2 <- ardlDlm(formula = Yt ~ Xt, data = train2, p = 1, q = 1)
+summary(model.ardl2)
+AIC(model.ardl2); BIC(model.ardl2)
+```
+
+Bener, $X_{t-1}$ nggak signifikan (p=0.56). Nambahin lag ini cuma bikin AIC & BIC naik dibanding model Koyck / ARDL(0,1) tadi — nggak worth it.
+
+```{r}
+fore.ardl2 <- forecast(model = model.ardl2, x = matrix(test2$Xt, nrow = 1), h = 10)
+mape.ardl2 <- MAPE(fore.ardl2$forecasts, test2$Yt)
+mape.ardl2
+GoF(model.ardl2)
+```
+
+MAPE-nya 4.85%, dikit lebih rendah dari Koyck (5.0%) tapi selisihnya kecil banget dan modelnya jadi lebih rumit buat gain yang nggak seberapa.
+
+## Perbandingan & Model Terbaik
+
+```{r}
+akurasi2 <- data.frame(
+  Model = c("Koyck / ARDL(0,1)", "ARDL(1,1)"),
+  AIC   = c(AIC(model.koyck2), AIC(model.ardl2)),
+  BIC   = c(BIC(model.koyck2), BIC(model.ardl2)),
+  MAPE  = c(mape.koyck2, mape.ardl2)
+)
+akurasi2
+```
+
+**Model terbaik buat Latihan 2 adalah ARDL(0,1)**, alias setara model Koyck di atas — AIC dan BIC-nya paling kecil, MAPE-nya juga udah bagus (~5%), dan modelnya paling sederhana (cuma 2 prediktor: $X_t$ dan $Y_{t-1}$). Nambah lag $X$ kayak di ARDL(1,1) nggak ngasih manfaat yang cukup buat nambah kompleksitas model.
+
+```{r}
+dwtest(model.koyck2$model)
+bptest(model.koyck2$model)
+```
+
+DW dan BP test dua-duanya p-value > 0.05, jadi residual model ini nggak ada masalah autokorelasi maupun heteroskedastisitas.
+
+$$\hat{Y_t}=1.72+0.222X_t+0.712Y_{t-1}$$
